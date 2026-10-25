@@ -9,17 +9,11 @@ class SimpsonsCharacter {
   final List<String> phrases;
 
   SimpsonsCharacter({
-    required this.id,
-    required this.name,
-    required this.status,
-    required this.occupation,
-    required this.gender,
-    required this.age,
-    required this.portraitPath,
-    required this.phrases,
+    required this.id, required this.name, required this.status,
+    required this.occupation, required this.gender, required this.age,
+    required this.portraitPath, required this.phrases,
   });
 
-  // Construcción de la URL de imagen según especificación de la API
   String get imageUrl {
     if (portraitPath.isEmpty) return '';
     if (portraitPath.startsWith('http')) return portraitPath;
@@ -27,23 +21,16 @@ class SimpsonsCharacter {
     return 'https://cdn.thesimpsonsapi.com/500$cleanPath';
   }
 
-  // Primera frase disponible o texto por defecto para la vista de detalle
-  String get mainPhrase {
-    if (phrases.isEmpty) return 'Sin frase célebre registrada';
-    return '"${phrases.first}"';
-  }
+  String get mainPhrase => phrases.isEmpty ? 'Sin frase célebre registrada' : '"${phrases.first}"';
 
   factory SimpsonsCharacter.fromJson(Map<String, dynamic> json) {
-    // Manejo seguro de la lista de frases (puede venir nula o vacía)
     List<String> parsedPhrases = [];
     if (json['phrases'] != null && json['phrases'] is List) {
       parsedPhrases = (json['phrases'] as List)
           .where((item) => item != null && item.toString().trim().isNotEmpty)
-          .map((item) => item.toString().trim())
-          .toList();
+          .map((item) => item.toString().trim()).toList();
     }
 
-    // Manejo seguro de texto vacío o nulo
     String parseField(dynamic value, String fallback) {
       if (value == null) return fallback;
       final text = value.toString().trim();
@@ -51,9 +38,7 @@ class SimpsonsCharacter {
     }
 
     return SimpsonsCharacter(
-      id: json['id'] is int
-          ? json['id']
-          : int.tryParse(json['id']?.toString() ?? '0') ?? 0,
+      id: json['id'] is int ? json['id'] : int.tryParse(json['id']?.toString() ?? '0') ?? 0,
       name: parseField(json['name'], 'Nombre desconocido'),
       status: parseField(json['status'], 'Desconocido'),
       occupation: parseField(json['occupation'], 'Sin ocupación registrada'),
@@ -73,31 +58,17 @@ class PaginatedCharactersResponse {
   final List<SimpsonsCharacter> results;
 
   PaginatedCharactersResponse({
-    required this.count,
-    required this.pages,
-    this.next,
-    this.prev,
-    required this.results,
+    required this.count, required this.pages, this.next, this.prev, required this.results,
   });
 
   factory PaginatedCharactersResponse.fromJson(Map<String, dynamic> json) {
-    // Soporta metadatos en la raíz o dentro de un objeto 'info' por seguridad
-    final meta = (json['info'] is Map<String, dynamic>)
-        ? json['info'] as Map<String, dynamic>
-        : json;
-
+    final meta = (json['info'] is Map<String, dynamic>) ? json['info'] as Map<String, dynamic> : json;
     final rawList = (json['results'] as List?) ?? [];
-    final characters = rawList
-        .whereType<Map<String, dynamic>>()
-        .map((item) => SimpsonsCharacter.fromJson(item))
-        .toList();
-
     return PaginatedCharactersResponse(
-      count: meta['count'] is int ? meta['count'] : characters.length,
+      count: meta['count'] is int ? meta['count'] : rawList.length,
       pages: meta['pages'] is int ? meta['pages'] : 1,
-      next: meta['next']?.toString(),
-      prev: meta['prev']?.toString(),
-      results: characters,
+      next: meta['next']?.toString(), prev: meta['prev']?.toString(),
+      results: rawList.whereType<Map<String, dynamic>>().map((item) => SimpsonsCharacter.fromJson(item)).toList(),
     );
   }
 }

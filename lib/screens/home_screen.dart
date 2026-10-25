@@ -1,11 +1,23 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import '../models/character_models.dart';
 import '../providers/characters_providers.dart';
 import 'detail_screen.dart';
 import 'favorites_screeen.dart';
+import 'login_screen.dart';
 
 class HomeScreen extends StatelessWidget {
   const HomeScreen({super.key});
+
+  Future<void> _handleFavoriteTap(BuildContext context, CharactersProvider provider, SimpsonsCharacter character) async {
+    if (!provider.isLoggedIn) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Inicia sesión para guardar favoritos.')));
+      final loggedIn = await Navigator.push<bool>(context, MaterialPageRoute(builder: (_) => const LoginScreen()));
+      if (loggedIn == true && context.mounted) provider.toggleFavorite(character);
+    } else {
+      provider.toggleFavorite(character);
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -13,32 +25,38 @@ class HomeScreen extends StatelessWidget {
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Catálogo Los Simpson'),
+        title: Text(provider.isLoggedIn ? 'Hola, ${provider.currentDisplayName}' : 'Catálogo'),
         actions: [
           IconButton(
             icon: const Icon(Icons.favorite),
-            tooltip: 'Ver Favoritos',
+            onPressed: () async {
+              if (!provider.isLoggedIn) {
+                final ok = await Navigator.push<bool>(context, MaterialPageRoute(builder: (_) => const LoginScreen()));
+                if (ok != true || !context.mounted) return;
+              }
+              Navigator.push(context, MaterialPageRoute(builder: (_) => const FavoritesScreen()));
+            },
+          ),
+          IconButton(
+            icon: Icon(provider.isLoggedIn ? Icons.logout : Icons.login),
             onPressed: () {
-              Navigator.push(
-                context,
-                MaterialPageRoute(builder: (_) => const FavoritesScreen()),
-              );
+              if (provider.isLoggedIn) provider.logout();
+              else Navigator.push(context, MaterialPageRoute(builder: (_) => const LoginScreen()));
             },
           ),
         ],
       ),
       body: Column(
         children: [
-          
           Padding(
-            padding: const EdgeInsets.all(12.0),
+            padding: const EdgeInsets.all(12),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 TextField(
                   onChanged: provider.updateSearchQuery,
                   decoration: const InputDecoration(
-                    labelText: 'Buscar por nombre',
+                    labelText: 'Buscar personaje por nombre',
                     prefixIcon: Icon(Icons.search),
                     border: OutlineInputBorder(),
                   ),
@@ -51,124 +69,48 @@ class HomeScreen extends StatelessWidget {
               ],
             ),
           ),
-
-          // Contenido principal 
           Expanded(
-            child: _buildContent(context, provider),
+            child: provider.isLoading
+                ? const Center(child: CircularProgressIndicator())
+                : provider.errorMessage != null
+                    ? Center(child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [Text(provider.errorMessage!), ElevatedButton(onPressed: provider.fetchCharacters, child: const Text('Reintentar'))]))
+                    : provider.filteredCharacters.isEmpty
+                        ? Center(child: Text('No hay coincidencias en la página ${provider.currentPage}.'))
+                        : ListView.builder(
+                            itemCount: provider.filteredCharacters.length,
+                            itemBuilder: (c, i) {
+                              final char = provider.filteredCharacters[i];
+                              final isFav = provider.isFavorite(char.id);
+                              return Card(
+                                margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                                child: ListTile(
+                                  leading: char.imageUrl.isNotEmpty ? Image.network(char.imageUrl, width: 50, height: 50, errorBuilder: (_,__,___)=>const Icon(Icons.broken_image)) : const Icon(Icons.person),
+                                  title: Text(char.name, style: const TextStyle(fontWeight: FontWeight.bold)),
+                                  subtitle: Text('Estado: ${char.status}\nOcupación: ${char.occupation}'),
+                                  isThreeLine: true,
+                                  trailing: IconButton(
+                                    icon: Icon(isFav ? Icons.favorite : Icons.favorite_border, color: isFav ? Colors.red : null),
+                                    onPressed: () => _handleFavoriteTap(context, provider, char),
+                                  ),
+                                  onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => DetailScreen(character: char))),
+                                ),
+                              );
+                            },
+                          ),
           ),
-
-          // RF-04: Controles de paginación Anterior y Siguiente
           Padding(
-            padding: const EdgeInsets.all(12.0),
+            padding: const EdgeInsets.all(12),
             child: Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                ElevatedButton(
-                  onPressed: provider.canGoPrev ? provider.prevPage : null,
-                  child: const Text('Anterior'),
-                ),
-                Text(
-                  'Página ${provider.currentPage} de ${provider.totalPages}',
-                  style: const TextStyle(fontWeight: FontWeight.bold),
-                ),
-                ElevatedButton(
-                  onPressed: provider.canGoNext ? provider.nextPage : null,
-                  child: const Text('Siguiente'),
-                ),
+                ElevatedButton(onPressed: provider.canGoPrev ? provider.prevPage : null, child: const Icon(Icons.arrow_back_ios, size: 16)),
+                Text('Página ${provider.currentPage} de ${provider.totalPages}', style: const TextStyle(fontWeight: FontWeight.bold)),
+                ElevatedButton(onPressed: provider.canGoNext ? provider.nextPage : null, child: const Icon(Icons.arrow_forward_ios, size: 16)),
               ],
             ),
-          ),
+          )
         ],
       ),
-    );
-  }
-
-  Widget _buildContent(BuildContext context, CharactersProvider provider) {
-    // 1. Indicador de carga
-    if (provider.isLoading) {
-      return const Center(child: CircularProgressIndicator());
-    }
-
-    // 
-    if (provider.errorMessage != null) {
-      return Center(
-        child: Padding(
-          padding: const EdgeInsets.all(16.0),
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              const Icon(Icons.error_outline, size: 48, color: Colors.red),
-              const SizedBox(height: 10),
-              Text(
-                provider.errorMessage!,
-                textAlign: TextAlign.center,
-              ),
-              const SizedBox(height: 12),
-              ElevatedButton(
-                onPressed: () => provider.fetchCharacters(),
-                child: const Text('Reintentar'),
-              ),
-            ],
-          ),
-        ),
-      );
-    }
-
-    final list = provider.filteredCharacters;
-
-    // 3. Estado sin resultados al buscar
-    if (list.isEmpty) {
-      return const Center(
-        child: Text('No se encontraron personajes en esta página.'),
-      );
-    }
-
-    // 
-    return ListView.builder(
-      itemCount: list.length,
-      itemBuilder: (context, index) {
-        final character = list[index];
-        final isFav = provider.isFavorite(character.id);
-
-        return Card(
-          margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-          child: ListTile(
-            leading: character.imageUrl.isNotEmpty
-                ? Image.network(
-                    character.imageUrl,
-                    width: 50,
-                    height: 50,
-                    fit: BoxFit.contain,
-                    errorBuilder: (context, error, stackTrace) =>
-                        const Icon(Icons.broken_image, size: 40),
-                  )
-                : const Icon(Icons.person, size: 40),
-            title: Text(
-              character.name,
-              style: const TextStyle(fontWeight: FontWeight.bold),
-            ),
-            subtitle: Text(
-              'Estado: ${character.status}\nOcupación: ${character.occupation}',
-            ),
-            isThreeLine: true,
-            trailing: IconButton(
-              icon: Icon(
-                isFav ? Icons.favorite : Icons.favorite_border,
-                color: isFav ? Colors.red : null,
-              ),
-              onPressed: () => provider.toggleFavorite(character),
-            ),
-            onTap: () {
-              Navigator.push(
-                context,
-                MaterialPageRoute(
-                  builder: (_) => DetailScreen(character: character),
-                ),
-              );
-            },
-          ),
-        );
-      },
     );
   }
 }

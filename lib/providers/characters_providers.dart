@@ -5,20 +5,21 @@ import '../services/simpsons_api_service.dart';
 
 class CharactersProvider extends ChangeNotifier {
   final SimpsonsApiService _apiService = SimpsonsApiService();
-  static const String _favoritesKey = 'favorite_ids';
-
-  List<SimpsonsCharacter> _characters = [];
-  final Map<int, SimpsonsCharacter> _cache = {};
-
+  
+  List<SimpsonsCharacter> _characters = []; // Personajes de la página actual
+  final Map<int, SimpsonsCharacter> _cache = {}; // Caché general para favoritos
   Set<int> _favoriteIds = {};
-  bool _isLoadingFavorites = false;
-
+  
+  int? _currentUserId;
+  String? _currentUsername;
+  String? _currentDisplayName;
+  
   int _currentPage = 1;
   int _totalPages = 1;
   bool _hasNext = false;
   bool _hasPrev = false;
-
   bool _isLoading = false;
+  bool _isLoadingFavorites = false;
   String? _errorMessage;
   String _searchQuery = '';
 
@@ -28,122 +29,149 @@ class CharactersProvider extends ChangeNotifier {
   bool get isLoadingFavorites => _isLoadingFavorites;
   String? get errorMessage => _errorMessage;
   String get searchQuery => _searchQuery;
+  bool get isLoggedIn => _currentUsername != null;
+  String get currentDisplayName => _currentDisplayName ?? '';
 
+  // La paginación siempre está disponible
   bool get canGoPrev => !_isLoading && (_currentPage > 1 || _hasPrev);
   bool get canGoNext => !_isLoading && (_currentPage < _totalPages || _hasNext);
 
-  // Filtra por nombre en la página actual sin distinguir mayúsculas/minúsculas
+  String get _prefsKey => 'favs_${_currentUsername ?? 'guest'}';
+
+  // REQUERIMIENTO ORIGINAL: Filtrado local sin distinguir mayúsculas
   List<SimpsonsCharacter> get filteredCharacters {
-    if (_searchQuery.trim().isEmpty) {
-      return _characters;
-    }
     final query = _searchQuery.trim().toLowerCase();
-    return _characters
-        .where((c) => c.name.toLowerCase().contains(query))
-        .toList();
+    if (query.isEmpty) return _characters;
+    
+    return _characters.where((c) {
+      return c.name.toLowerCase().contains(query);
+    }).toList();
   }
 
-  // Devuelve la lista de objetos favoritos guardados
   List<SimpsonsCharacter> get favoriteCharacters {
-    return _favoriteIds
-        .where((id) => _cache.containsKey(id))
-        .map((id) => _cache[id]!)
-        .toList();
+    if (!isLoggedIn) return [];
+    return _favoriteIds.where((id) => _cache.containsKey(id)).map((id) => _cache[id]!).toList();
   }
 
-  CharactersProvider() {
-    _init();
-  }
+  CharactersProvider() { _init(); }
 
   Future<void> _init() async {
-    await loadFavoritesFromPrefs();
+    await _restoreSession();
     await fetchCharacters(page: 1);
+  }
+
+  Future<void> _restoreSession() async {
+    final prefs = await SharedPreferences.getInstance();
+    final savedUser = prefs.getString('username');
+    if (savedUser != null) {
+      _currentUserId = prefs.getInt('user_id');
+      _currentUsername = savedUser;
+      _currentDisplayName = prefs.getString('display_name') ?? savedUser;
+      await loadFavoritesFromPrefs();
+    }
+  }
+
+  Future<void> login(String user, String pass) async {
+    final data = await _apiService.loginUser(user, pass);
+    await _saveSession(data);
+  }
+
+  Future<void> register({required String nombre, required String username, required String email, required String password}) async {
+    final data = await _apiService.registerUser(nombre: nombre, username: username, email: email, password: password);
+    await _saveSession(data);
+  }
+
+  Future<void> _saveSession(Map<String, dynamic> data) async {
+    _currentUserId = int.tryParse(data['id'].toString());
+    _currentUsername = data['username'].toString();
+    _currentDisplayName = data['nombre'].toString();
+
+    final prefs = await SharedPreferences.getInstance();
+    if (_currentUserId != null) await prefs.setInt('user_id', _currentUserId!);
+    await prefs.setString('username', _currentUsername!);
+    await prefs.setString('display_name', _currentDisplayName!);
+
+    await loadFavoritesFromPrefs();
+
+    if (data['favorite_ids'] is List) {
+      for (final item in data['favorite_ids']) {
+        final id = int.tryParse(item.toString());
+        if (id != null) _favoriteIds.add(id);
+      }
+      await prefs.setStringList(_prefsKey, _favoriteIds.map((e) => e.toString()).toList());
+    }
+    notifyListeners();
+  }
+
+  Future<void> logout() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove('user_id');
+    await prefs.remove('username');
+    await prefs.remove('display_name');
+    _currentUserId = null; _currentUsername = null; _currentDisplayName = null;
+    _favoriteIds.clear();
+    notifyListeners();
   }
 
   Future<void> fetchCharacters({int? page}) async {
     final targetPage = page ?? _currentPage;
-    _isLoading = true;
-    _errorMessage = null;
-    notifyListeners();
-
+    _isLoading = true; _errorMessage = null; notifyListeners();
     try {
-      final response = await _apiService.getCharactersPage(targetPage);
-      _characters = response.results;
+      final res = await _apiService.getCharactersPage(targetPage);
+      _characters = res.results;
       _currentPage = targetPage;
-      _totalPages = response.pages > 0 ? response.pages : 1;
-      _hasNext = response.next != null && response.next!.isNotEmpty;
-      _hasPrev = response.prev != null && response.prev!.isNotEmpty;
-
-      for (var c in _characters) {
-        _cache[c.id] = c;
-      }
+      _totalPages = res.pages > 0 ? res.pages : 1;
+      _hasNext = res.next != null; _hasPrev = res.prev != null;
+      for (var c in _characters) _cache[c.id] = c;
     } catch (e) {
-      _errorMessage = e.toString().replaceFirst('Exception: ', '');
+      _errorMessage = e.toString().replaceAll('Exception: ', '');
     } finally {
-      _isLoading = false;
-      notifyListeners();
+      _isLoading = false; notifyListeners();
     }
   }
 
-  void nextPage() {
-    if (canGoNext) {
-      fetchCharacters(page: _currentPage + 1);
-    }
-  }
+  void nextPage() { if (canGoNext) fetchCharacters(page: _currentPage + 1); }
+  void prevPage() { if (canGoPrev) fetchCharacters(page: _currentPage - 1); }
 
-  void prevPage() {
-    if (canGoPrev) {
-      fetchCharacters(page: _currentPage - 1);
-    }
-  }
-
-  void updateSearchQuery(String query) {
-    _searchQuery = query;
+  void updateSearchQuery(String q) {
+    _searchQuery = q;
     notifyListeners();
   }
 
   Future<void> loadFavoritesFromPrefs() async {
+    if (!isLoggedIn) { _favoriteIds = {}; notifyListeners(); return; }
     final prefs = await SharedPreferences.getInstance();
-    final saved = prefs.getStringList(_favoritesKey) ?? [];
+    final saved = prefs.getStringList(_prefsKey) ?? [];
     _favoriteIds = saved.map((e) => int.tryParse(e)).whereType<int>().toSet();
     notifyListeners();
   }
 
   Future<void> toggleFavorite(SimpsonsCharacter character) async {
+    if (!isLoggedIn) return;
     _cache[character.id] = character;
-
-    if (_favoriteIds.contains(character.id)) {
-      _favoriteIds.remove(character.id);
-    } else {
-      _favoriteIds.add(character.id);
-    }
+    final bool isFav;
+    if (_favoriteIds.contains(character.id)) { _favoriteIds.remove(character.id); isFav = false; } 
+    else { _favoriteIds.add(character.id); isFav = true; }
     notifyListeners();
 
     final prefs = await SharedPreferences.getInstance();
-    final listToSave = _favoriteIds.map((id) => id.toString()).toList();
-    await prefs.setStringList(_favoritesKey, listToSave);
+    await prefs.setStringList(_prefsKey, _favoriteIds.map((e) => e.toString()).toList());
+    
+    if (_currentUserId != null) {
+      await _apiService.syncFavoriteInDatabase(userId: _currentUserId!, characterId: character.id, isFavorite: isFav);
+    }
   }
 
-  bool isFavorite(int id) {
-    return _favoriteIds.contains(id);
-  }
+  bool isFavorite(int id) => isLoggedIn && _favoriteIds.contains(id);
 
-  // Si se reinició la app, descarga por ID los favoritos que no estén en la página 1
   Future<void> loadMissingFavorites() async {
+    if (!isLoggedIn) return;
     final missing = _favoriteIds.where((id) => !_cache.containsKey(id)).toList();
     if (missing.isEmpty) return;
-
-    _isLoadingFavorites = true;
-    notifyListeners();
-
+    _isLoadingFavorites = true; notifyListeners();
     for (final id in missing) {
-      try {
-        final character = await _apiService.getCharacterById(id);
-        _cache[id] = character;
-      } catch (_) {}
+      try { _cache[id] = await _apiService.getCharacterById(id); } catch (_) {}
     }
-
-    _isLoadingFavorites = false;
-    notifyListeners();
+    _isLoadingFavorites = false; notifyListeners();
   }
 }
